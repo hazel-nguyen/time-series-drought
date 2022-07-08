@@ -1,0 +1,899 @@
+---
+title: "Appendix"
+author: "Seth Daly, Duc Vu, Bich Ha Nguyen, Ngoc Xuan Dung Nguyen"
+date: "11/22/2021"
+output:
+  word_document:
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+#pdf_document
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Import libraries
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "1"}
+library(MASS)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(rqdatatable)
+library(lubridate)
+library(caret)
+library(xts)
+library(forecast)
+library(tsbox)
+library(TSstudio)
+library(knitr)  
+library(kableExtra) # formatting table
+library(gtools)
+library(TSA)
+library(tseries)
+library(gridExtra)
+library(ggpubr)
+```
+
+# Data Cleaning
+
+## Read In
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "2"}
+droughtData <- read_csv("SPI.csv",
+      col_names = c('SPI', 'Date', 'D0', 'D1', 'D2','D3', 'D4', 'SPI2', 'W0', 'W1', 'W2', 'W3','W4'), skip=1)
+droughtData <- droughtData %>%
+mutate(Date = ymd(substring(droughtData$'Date', 3)))
+droughtData <- droughtData %>% filter(SPI > 0)
+droughtData_D0 <- ts(droughtData$D0, start=c(1895, 9), end=c(2022, 3), freq=12)
+
+
+
+### From 1895/09 to 1956/12
+droughtData_1956 <- ts(droughtData_D0, start=c(1895, 9), end=c(1956, 12), freq=12)
+
+
+### From 1957/01 to 2022/03
+droughtData_2022 <- ts(droughtData_D0, start=c(1957, 1), end=c(2022, 3), freq=12)
+
+
+
+### Train/Val Split from 1895/09 to 1956/12
+train_1956 <- window(droughtData_1956, start = c(1895, 1), end=c(1955, 12))
+val_1956 <- window(droughtData_1956, start = c(1956, 1), end=c(1956, 12))
+
+
+
+### Train/Val Split from 1957/01 to 2022/03
+train_2022 <- window(droughtData_2022, start = c(1957, 1), end=c(2020, 12))
+val_2022 <- window(droughtData_2022, start = c(2021, 1), end=c(2022, 3))
+```
+
+# EDA
+
+## Variable meaning (important)
+Dry spell percentiles and corresponding
+USDM categories: 
+D0 = At Least Abnormally Dry, 
+D1 = At Least Moderate Drought, 
+D2 = At Least Severe Drought, 
+D3 = At Least Extreme Drought, 
+D4 = At Least Exceptional Drought. 
+
+Note, categories are not mutually exclusive:
+
+D0 + D1 + D2 + D3 + D4 != total amount of droughts!
+
+D0 is total amount of droughts
+
+All these values are percent of the country suffering this issue.
+
+## Structure
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "3"}
+head(droughtData_D0)
+tail(droughtData_D0)
+dim(droughtData_D0)
+```
+
+
+## Old Data
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "4"}
+dim(droughtData_1956)
+head(droughtData_1956)
+tail(droughtData_1956)
+
+autoplot(droughtData_1956)
+```
+
+## New Data
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "5"}
+dim(droughtData_2022)
+head(droughtData_2022)
+tail(droughtData_2022)
+
+autoplot(droughtData_2022)
+```
+
+## All Data
+```{r}
+## Autoplot of all data
+ggplot2::ggplot(data=droughtData) +  
+geom_line(aes(x=Date, y=D0), size=0.4) +
+  	scale_color_manual(name="", values=c("Blue")) + 
+  	labs(x="Year", y="Percentage")+
+ 	ggtitle("Percentage of Abnormal Drought in US (1895-2022)") + 
+  	theme(legend.position="bottom")
+
+## Dickey Fuller test
+adf.test(droughtData$D0)
+
+## Trend & Seasonality + Remainder
+       autoplot(stl(droughtData_D0, s.window = "periodic"))
+
+       ## The distribution of D0 values
+       ggplot(data = droughtData, aes(x=D0)) + 
+geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.8) + 
+labs(x="Percentage of Abnormal Drought", y="Frequency") +
+geom_vline(aes(xintercept=mean(D0)), color="blue", linetype="dashed", size=1)
+```
+
+# Holt Winters Modeling
+
+## Holt Winters Modeling (Old D0)
+
+### Model Creation
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "6"}
+D0TS.full.old <- droughtData_1956
+D0TS.full <- droughtData
+D0TS.full.new <- droughtData_2022
+D0TS.test.old <- val_1956
+D0TS.train.old <- train_1956
+D0TS.test.new <- val_2022
+D0TS.train.new <- train_2022
+
+D0.exp.old <- HoltWinters(D0TS.train.old, beta=FALSE, gamma=FALSE)
+D0.trend.old <- HoltWinters(D0TS.train.old, gamma=FALSE)           
+D0.season.old <- HoltWinters(D0TS.train.old, beta=FALSE)      
+D0.hw.old <- HoltWinters(D0TS.train.old)  
+```
+
+### Model Predictions
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "7"}
+D0.for.exp.old <- forecast(D0.exp.old, h=length(D0TS.test.old))
+D0.for.trend.old <- forecast(D0.trend.old, h=length(D0TS.test.old))
+D0.for.season.old <- forecast(D0.season.old, h=length(D0TS.test.old))
+D0.for.hw.old <- forecast(D0.hw.old, h=length(D0TS.test.old))
+```
+
+### Visual Model Comparison
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "8"}
+autoplot(window(D0TS.train.old, start=c(1950,1))) + 
+  autolayer(D0.for.exp.old, PI=FALSE, series="Exponential") +
+  autolayer(D0.for.trend.old, PI=FALSE, series="Holt Winters (Trend Only)") +
+  autolayer(D0.for.season.old, PI=FALSE, series="Holt Winters (Seasonality Only) ") +
+  autolayer(D0.for.hw.old, PI=FALSE, series="Holt Winters") +
+  autolayer(D0TS.test.old, series="True Drought Percentage") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+```
+
+### Compare Model Accuracy
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "9"}
+tab <- rbind(accuracy(D0.for.exp.old, D0TS.test.old)[2,2:3],
+             accuracy(D0.for.trend.old, D0TS.test.old)[2,2:3],
+             accuracy(D0.for.season.old, D0TS.test.old)[2,2:3],
+             accuracy(D0.for.hw.old, D0TS.test.old)[2,2:3] )
+rownames(tab) <- c("Exp Smoothing", "Holt (trend)", "HW (Season only)", "Holt Winters")
+kable(tab)
+```
+
+From a combination of RMSE and MAE, we select the Holt Winters Model.
+
+### Visual Final Model Comparison
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "10"}
+autoplot(window(D0TS.train.old, start=c(1950,1))) + 
+  autolayer(D0.for.hw.old, PI=TRUE, series="Holt Winter") +
+  autolayer(D0TS.test.old, series="True Drought Percentage") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+```
+
+The Holt Winters model appears to be a fairly accurate measure of trend, but not of specific spikes and drops.  The prediction bands are extremely wide, which may indicate our lack of confidence in this specific prediction.
+
+## Holt Winters Modeling (New D0)
+
+### Model Creation
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "11"}
+D0.exp.new <- HoltWinters(D0TS.train.new, beta=FALSE, gamma=FALSE)
+D0.trend.new <- HoltWinters(D0TS.train.new, gamma=FALSE)           
+D0.season.new <- HoltWinters(D0TS.train.new, beta=FALSE)      
+D0.hw.new <- HoltWinters(D0TS.train.new)  
+```
+
+### Model Predictions
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "12"}
+D0.for.exp.new <- forecast(D0.exp.new, h=length(D0TS.test.new))
+D0.for.trend.new <- forecast(D0.trend.new, h=length(D0TS.test.new))
+D0.for.season.new <- forecast(D0.season.new, h=length(D0TS.test.new))
+D0.for.hw.new <- forecast(D0.hw.new, h=length(D0TS.test.new))
+
+```
+
+### Visual Model Comparison
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "13"}
+autoplot(window(D0TS.train.new, start=c(2010,1))) + 
+  autolayer(D0.for.exp.new, PI=FALSE, series="Exponential") +
+  autolayer(D0.for.trend.new, PI=FALSE, series="Holt Winters (Trend Only)") +
+  autolayer(D0.for.season.new, PI=FALSE, series="Holt Winters (Seasonality Only) ") +
+  autolayer(D0.for.hw.new, PI=FALSE, series="Holt Winters") +
+  autolayer(D0TS.test.new, series="True Drought Percentage") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+```
+
+### Compare Model Accuracy
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "14"}
+tab <- rbind(accuracy(D0.for.exp.new, D0TS.test.new)[2,2:3],
+             accuracy(D0.for.trend.new, D0TS.test.new)[2,2:3],
+             accuracy(D0.for.season.new, D0TS.test.new)[2,2:3],
+             accuracy(D0.for.hw.new, D0TS.test.new)[2,2:3] )
+rownames(tab) <- c("Exp Smoothing", "Holt (trend)", "HW (Season only)", "Holt Winters")
+kable(tab)
+```
+
+From a combination of RMSE and MAE, we select the Holt Winters (Season Only) model.
+
+### Visual Final Model Comparison
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "15"}
+autoplot(window(D0TS.train.new, start=c(2010,1))) + 
+  autolayer(D0.for.season.new, PI=TRUE, series="Holt Winter (Season Only)") +
+  autolayer(D0TS.test.new, series="True Drought Percentage") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+```
+
+# Cosine-Sine Model
+
+## Part 1: Old Period 
+
+### Examine Data
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "19"}
+train_1956 %>%
+  ggtsdisplay(xlab="Year",
+              main="D0 Old data Drought")
+
+
+train_1956 %>% diff() %>%
+  ggtsdisplay(xlab="Year",
+              main="Differenced D0 Old data Drought")
+```
+
+### A. Periodogram
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "20"}
+f1956 = spec.pgram(train_1956, log="no", spans=c(9,9), detrend = TRUE)
+f1956d = spec.pgram(diff(train_1956), log="no", spans=c(9,9), detrend = TRUE)
+```
+
+### identify frequency
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "21"}
+del <- 12
+spx1956 <- f1956d$freq/del
+spy1956 <- 2*f1956d$spec
+plot(spy1956~spx1956,xlab="frequency",ylab="spectral density",type="l")
+#### frequencies: 0.04, 0.19, 0.25, 0.4, 0.5
+abline(v=0.05, col="red") 
+abline(v=0.155, col="blue")
+abline(v=0.275, col="green")
+abline(v=0.39, col="pink")
+```
+
+### Fit cosine-sine regression model
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "22"}
+w1=0.05
+w2=0.155
+w3=0.275
+w4=0.39
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "23"}
+t= 1:length(diff(train_1956))
+cs1=cos(2*pi*w1*t) 
+si1=sin(2*pi*w1*t) 
+cs2=cos(2*pi*w2*t) 
+si2=sin(2*pi*w2*t)
+cs3=cos(2*pi*w3*t) 
+si3=sin(2*pi*w3*t) 
+cs4=cos(2*pi*w4*t) 
+si4=sin(2*pi*w4*t) 
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "24"}
+fit1.1=lm(diff(train_1956)~t+cs1+si1+cs2+si2+cs3+si3+cs4+si4) 
+summary(fit1.1)
+
+fit1.2=lm(diff(train_1956) ~ si1-1) 
+summary(fit1.2) 
+
+resi1.1=fit1.2$residuals
+temp1 <- ts(resi1.1, start=c(1895, 9), frequency=12)
+temp1 %>% ggtsdisplay()
+```
+
+### Fit with ARIMA 
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "25"}
+t= 1:length(train_1956)
+si1=sin(2*pi*w1*t) 
+
+
+fitp1.1 <- Arima(train_1956, order=c(2, 1, 2), xreg=cbind(si1))
+fitp1.2 <- Arima(train_1956, order=c(2, 1, 0), xreg=cbind(si1))
+fitp1.3 <- Arima(train_1956, order=c(0, 1, 2), xreg=cbind(si1))
+fitp1.4 <- Arima(train_1956, order=c(1, 1, 1), xreg=cbind(si1))
+fitp1.5 <- Arima(train_1956, order=c(2, 1, 1), xreg=cbind(si1))
+fitp1.6 <- Arima(train_1956, order=c(1, 1, 2), xreg=cbind(si1))
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "26"}
+getAIC <- function(fit) {
+   c(fit$aic, fit$aicc, fit$bic)
+}
+
+tab <- rbind(getAIC(fitp1.1), getAIC(fitp1.2), getAIC(fitp1.3),
+             getAIC(fitp1.4), getAIC(fitp1.5), getAIC(fitp1.6))
+tab
+colnames(tab) <- c("AIC", "AICc", "BIC")
+rownames(tab) <- c("ARIMA(2, 1, 2)",
+                   "ARIMA(2, 1, 0)",
+                   "ARIMA(0, 1, 2)",
+                   "ARIMA(1, 1, 1)",
+                   "ARIMA(2, 1, 1)",
+                   "ARIMA(1, 1, 2)")
+tab %>% kbl()%>%
+  kable_material(c("striped", "hover"))
+```
+
+
+### Model Accuracy
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "27"}
+t1.test = 1:length(val_1956)
+si1.t=sin(2*pi*w1*t1.test) 
+
+d0_1.validation <- forecast(fitp1.1, xreg=cbind(si1.t))
+acc1 <- accuracy(d0_1.validation, val_1956)
+acc1
+acc1[2, 2:3]
+
+d0_1.validation2 <- forecast(fitp1.5, xreg=cbind(si1.t))
+acc2 <- accuracy(d0_1.validation2, val_1956)
+acc2
+```
+
+### Visual plot
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "28"}
+autoplot(train_1956) +
+  autolayer(fitted(fitp1.1))
+
+autoplot(val_1956) + 
+  autolayer(d0_1.validation)
+
+autoplot(window(train_1956, start=c(1950,1))) + 
+  autolayer(d0_1.validation, series="arima with cosine") + 
+  autolayer(val_1956, series="True Percentage", size=1.5) +
+  labs(x="Year", y="Percentage") +
+  theme_bw()
+```
+
+
+### Forecast 3 more data points
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "29"}
+t1_f= 1:length(droughtData_1956)
+si1_f=sin(2*pi*w1*t1_f) 
+
+
+fullfit1 <- Arima(droughtData_1956, order=c(2, 1, 2), xreg=cbind(si1_f))
+summary(fullfit1)
+checkresiduals(fullfit1)
+
+t1_n = 1:12
+si1_n=sin(2*pi*w1*t1_n) 
+
+d0_1.new <- forecast(fullfit1, xreg=cbind(si1_n))
+autoplot(window(droughtData_1956, start=c(1950,1))) + 
+  autolayer(d0_1.new, size=1.5) +
+  labs(x="Year", y="Percentage") +
+  theme_bw()
+```
+
+
+## Part 2: New Period
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "30"}
+#Convert Label
+
+train_2022 %>%
+  ggtsdisplay(xlab="Year",
+              main="Percentage of US experienced Abnormal Dry to Severe drought 1957-2022")
+
+
+train_2022 %>% diff() %>%
+  ggtsdisplay(xlab="Year",
+              main="Differenced Percentage of US experienced Abnormal Dry to Severe drought 1957-2022")
+```
+### A. Periodogram
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "31"}
+f2022 = spec.pgram(train_2022, log="no", spans=c(9,9), detrend = TRUE)
+f2022d = spec.pgram(diff(train_2022), log="no", spans=c(9,9), detrend = TRUE)
+```
+### identify frequency
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "32"}
+spx2022 <- f2022d$freq/del
+spy2022 <- 2*f2022d$spec
+plot(spy2022~spx2022,xlab="frequency",ylab="spectral density",type="l")
+#### frequencies: 0.04, 0.19, 0.25, 0.4, 0.5
+abline(v=0.05, col="red") 
+abline(v=0.155, col="blue")
+abline(v=0.275, col="green")
+abline(v=0.39, col="pink")
+```
+
+
+### Fit cosine-sine regression model
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "33"}
+w1=0.05
+w2=0.155
+w3=0.275
+w4=0.39
+
+
+
+t= 1:length(diff(train_2022))
+cs1=cos(2*pi*w1*t) 
+si1=sin(2*pi*w1*t) 
+cs2=cos(2*pi*w2*t) 
+si2=sin(2*pi*w2*t)
+cs3=cos(2*pi*w3*t) 
+si3=sin(2*pi*w3*t) 
+cs4=cos(2*pi*w4*t) 
+si4=sin(2*pi*w4*t) 
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "34"}
+fit2.1=lm(diff(train_2022)~t+cs1+si1+cs2+si2+cs3+si3+cs4+si4) 
+summary(fit2.1) 
+
+fit2.2=lm(diff(train_2022)~si1-1) 
+summary(fit2.2) 
+
+resi2=fit2.2$residuals
+temp2 <- ts(resi2, start=c(1957, 1), frequency=12)
+temp2 %>% ggtsdisplay()
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "34 A"}
+train_2022 %>% diff() %>% ggtsdisplay()
+
+
+t2= 1:length(train_2022)
+si2=sin(2*pi*w1*t2) 
+```
+
+### Fit Arima Model
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "34 B"}
+fitp2.1 <- Arima(train_2022, order=c(2, 1, 2), xreg=cbind(si2))
+fitp2.2 <- Arima(train_2022, order=c(2, 1, 0), xreg=cbind(si2))
+fitp2.3 <- Arima(train_2022, order=c(1, 1, 1), xreg=cbind(si2))
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "34 C"}
+tab <- rbind(getAIC(fitp2.1), getAIC(fitp2.2), getAIC(fitp2.3))
+tab
+colnames(tab) <- c("AIC", "AICc", "BIC")
+rownames(tab) <- c("ARIMA(2, 1, 2)",
+                   "ARIMA(2, 1, 0)",
+                   "ARIMA(1, 1, 1)")
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "34 D"}
+tab %>% kbl()%>%
+  kable_material(c("striped", "hover"))
+```
+
+
+### Model Accuracy
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "35"}
+t2.test = 1:length(val_2022)
+si2.t=sin(2*pi*w1*t2.test) 
+
+d0_2.validation <- forecast(fitp2.2, xreg=cbind(si2.t))
+acc1 <- accuracy(d0_2.validation, val_2022)
+acc1
+acc1[2, 2:3]
+
+d0_2.validation2 <- forecast(fitp2.3, xreg=cbind(si2.t))
+acc2 <- accuracy(d0_2.validation2, val_2022)
+acc2
+acc2[2, 2:3]
+
+d0_2.validation3 <- forecast(fitp2.1, xreg=cbind(si2.t))
+acc3 <- accuracy(d0_2.validation3, val_2022)
+acc3
+acc3[2, 2:3]
+```
+
+### Visual plot
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "36"}
+autoplot(train_2022) +
+  autolayer(fitted(fitp2.3))
+
+autoplot(val_2022) + 
+  autolayer(d0_2.validation2)
+
+autoplot(window(train_2022, start=c(2015,1))) + 
+  autolayer(d0_2.validation2, series="arima with cosine") + 
+  autolayer(val_2022, series="True Percentage", size=1.5) +
+  labs(x="Year", y="Percentage") +
+  theme_bw()
+```
+
+
+### Forecast 3 more data points
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "37"}
+t2_f= 1:length(droughtData_2022)
+si2_f=sin(2*pi*w1*t2_f) 
+
+
+fullfit2 <- Arima(droughtData_2022, order=c(1, 1, 1), xreg=cbind(si2_f))
+summary(fullfit2)
+checkresiduals(fullfit2)
+
+t2_n = 4:12
+si2_n=sin(2*pi*w1*t2_n) 
+
+d0_2.new <- forecast(fullfit2, xreg=cbind(si2_n))
+autoplot(window(droughtData_2022, start=c(2000,1))) + 
+  autolayer(d0_2.new, size=1.5) +
+  labs(x="Year", y="Percentage") +
+  theme_bw()
+```
+
+# SARIMA Modeling
+
+## SARIMA model for new data
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "38"}
+log <- window(train_2022,start=c(1957,1), freq=12)
+logD0TS <- log(log)
+autoplot(logD0TS)
+grid.arrange(ggAcf(logD0TS),ggPacf(logD0TS),nrow=1)
+adf.test(logD0TS)
+
+datalog1 <- logD0TS %>% diff(lag=12) 
+datalog1 %>% ggtsdisplay()
+adf.test(datalog1)
+
+datalog2 <- logD0TS %>% diff(lag=12) %>% diff()
+datalog2 %>% ggtsdisplay()
+adf.test(datalog2)
+
+log1 <- Arima(logD0TS, order=c(2, 0, 1), seasonal=c(2,0,0))
+log2 <- Arima(logD0TS, order=c(1, 0, 1), seasonal=c(1,0,0))
+log3 <- Arima(logD0TS, order=c(2, 0, 1), seasonal=c(1,0,0))
+log4 <- Arima(logD0TS, order=c(1, 0, 2), seasonal=c(1,0,0))
+log5 <- Arima(logD0TS, order=c(2, 0, 2), seasonal=c(1,0,0))
+log6 <- Arima(logD0TS, order=c(1, 0, 1), seasonal=c(1,0,1))
+log7 <- Arima(logD0TS, order=c(2, 0, 1), seasonal=c(1,0,1))
+log8 <- Arima(logD0TS, order=c(1, 0, 2), seasonal=c(1,0,1))
+log9 <- Arima(logD0TS, order=c(2, 0, 2), seasonal=c(1,0,1))
+log10 <- Arima(logD0TS, order=c(1, 0, 1), seasonal=c(2,0,1))
+log11 <- Arima(logD0TS, order=c(2, 0, 1), seasonal=c(2,0,1))
+log12 <- Arima(logD0TS, order=c(1, 0, 2), seasonal=c(2,0,1))
+log12 <- Arima(logD0TS, order=c(2, 0, 2), seasonal=c(2,0,1))
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "39"}
+getAIC <- function(fit) {
+  c(fit$aic, fit$aicc, fit$bic)
+}
+
+tab <- rbind(getAIC(log1), getAIC(log2), getAIC(log3),getAIC(log4), getAIC(log5), getAIC(log6), getAIC(log7), getAIC(log8), getAIC(log9), getAIC(log10), getAIC(log11), getAIC(log12))
+colnames(tab) <- c("AIC", "AICc", "BIC")
+rownames(tab) <- c("SARIMA(2,0,1)(2,0,0)","SARIMA(1,0,1)(1,0,0)","SARIMA(2,0,1)(1,0,0)","SARIMA(1,0,2)(1,0,0)",
+                   "SARIMA(2,0,2)(1,0,0)","SARIMA(1,0,1)(1,0,1)","SARIMA(2,0,1)(1,0,1)","SARIMA(1,0,2)(1,0,1)",
+                   "SARIMA(2,0,2)(1,0,1)","SARIMA(1,0,1)(2,0,1)","SARIMA(1,0,2)(2,0,1)","SARIMA(2,0,2)(2,0,1)")
+```
+
+```{r}
+tab %>% kableExtra::kbl()%>%
+  kable_material(c("striped", "hover"))
+```
+
+```{r}
+log1
+```
+
+$$Y_t(1+\phi_1B)(1+\phi_2B)(1+\Phi_1B^{12})(1+\Phi_2B^{12})= \varepsilon_t(1+\theta_1B)$$
+$$Y_t(1+\phi_1B+\phi_2B+\phi_1\phi_2B^2)(1+\Phi_1B^{12}+\Phi_2B^{12}+\Phi_1\Phi_2B^{24})= \varepsilon_t(1+\theta_1B)$$
+$$Y_t(1+(\Phi_1+\Phi_2)B^{12}+\Phi_1\Phi_1B^{24}+\phi_1\phi_1B^2+\phi_1\phi_2\Phi_1\Phi_2B^{26}+\phi_1\phi_2(\Phi_1+\Phi_2)B^{14}+ (\phi_1+\phi_2)B+\Phi_1\Phi_2(\phi_1+\phi_2)B^{25}+(\Phi_1+\Phi_2)(\phi_1+\phi_2)B^{13})= \varepsilon_t(1+\theta_1B)$$
+$$Y_t = (\phi_1+\phi_2)Y_{t-1} + \phi_1\phi_2Y_{t-2} + (\Phi_1+\Phi_2)Y_{t-12} + (\phi_1+\phi_2)(\Phi_1+\Phi_2)Y_{t-13} + \phi_1\phi_2(\Phi_1+\Phi_2)Y_{t-14} + \Phi_1\Phi_2Y_{t-24} + \Phi_1\Phi_2(\phi_1+\phi_2)Y_{t-25} + \Phi_1\Phi_2\phi_1\phi_2Y_{t-26}+ \varepsilon_t +  \theta_1\varepsilon_{t-1}$$
+$$Y_t = 0.962Y_{t-1} -1.325Y_{t-2} -0.02Y_{t-12} -0.019Y_{t-13} + 0.026Y_{t-14} -0.008Y_{t-24} -0.008Y_{t-25} +  0.011Y_{t-26}+ \varepsilon_t -0.717\varepsilon_{t-1}$$
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "40"}
+checkresiduals(log1)
+Box.test(residuals(log1), lag=4, type="Ljung-Box", fitdf=1)
+tsdiag(log1, gof.lag = 15, omit.initial=F)
+
+residualslog <- residuals(log1)
+fittedlog <- logD0TS - residualslog
+ts.plot(train_2022) + points(exp(fittedlog), type = "l", col = 2, lty = 2)
+
+forecastlog <- forecast(log1, h=15)
+forecastlog$lower <- exp(forecastlog$lower)
+forecastlog$upper <- exp(forecastlog$upper)
+forecastlog$mean <- exp(forecastlog$mean)
+forecastlog$x <- exp(forecastlog$x)
+
+drought.predict.test <- ts_reshape(val_2022)
+drought.2022 <- drought.predict.test[1:3,c(1,3)]
+drought.predict.test <- drought.predict.test[,-c(3)] 
+colnames(drought.predict.test)[2] <- "Actual"
+drought.predict.test[13:15,] <- drought.2022
+
+forecast.full <- cbind(forecastlog,drought.predict.test[c("Actual")])
+forecast.full
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "41"}
+acc <- accuracy(forecastlog,val_2022)
+acc
+
+autoplot(forecastlog)
+
+autoplot(window(train_2022, start=c(2015,1))) + 
+  autolayer(forecastlog, PI=TRUE, series="Forecast") +
+  autolayer(val_2022, series="True Drought Percentage", size=1) +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+  
+auto.arima(logD0TS)
+```
+
+## SARIMA modeling for old data
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "42"}
+log2 <- window(train_1956,start=c(1895, 9), freq=12)
+logD0TS2 <- log(log2)
+autoplot(logD0TS2)
+grid.arrange(ggAcf(logD0TS2),ggPacf(logD0TS2),nrow=1)
+adf.test(logD0TS2)
+
+datalog12 <- logD0TS2 %>% diff(lag=12) 
+datalog12 %>% ggtsdisplay()
+adf.test(datalog12)
+
+datalog22 <- logD0TS2 %>% diff(lag=12) %>% diff()
+datalog22 %>% ggtsdisplay()
+adf.test(datalog22)
+
+log1_2 <- Arima(logD0TS2, order=c(2, 0, 1), seasonal=c(2,0,0))
+log2_2 <- Arima(logD0TS2, order=c(1, 0, 1), seasonal=c(1,0,0))
+log3_2 <- Arima(logD0TS2, order=c(2, 0, 1), seasonal=c(1,0,0))
+log4_2 <- Arima(logD0TS2, order=c(1, 0, 2), seasonal=c(1,0,0))
+log5_2 <- Arima(logD0TS2, order=c(2, 0, 2), seasonal=c(1,0,0))
+log6_2 <- Arima(logD0TS2, order=c(1, 0, 1), seasonal=c(1,0,1))
+log7_2 <- Arima(logD0TS2, order=c(2, 0, 1), seasonal=c(1,0,1))
+log8_2 <- Arima(logD0TS2, order=c(1, 0, 2), seasonal=c(1,0,1))
+log9_2 <- Arima(logD0TS2, order=c(2, 0, 2), seasonal=c(1,0,1))
+log10_2 <- Arima(logD0TS2, order=c(1, 0, 1), seasonal=c(2,0,1))
+log11_2 <- Arima(logD0TS2, order=c(2, 0, 1), seasonal=c(2,0,1))
+log12_2 <- Arima(logD0TS2, order=c(1, 0, 2), seasonal=c(2,0,1))
+log12_2 <- Arima(logD0TS2, order=c(2, 0, 2), seasonal=c(2,0,1))
+```
+
+```{r}
+getAIC <- function(fit) {
+  c(fit$aic, fit$aicc, fit$bic)
+}
+
+tab2 <- rbind(getAIC(log1_2), getAIC(log2_2), getAIC(log3_2),getAIC(log4_2), getAIC(log5_2), getAIC(log6_2), getAIC(log7_2), getAIC(log8_2), getAIC(log9_2), getAIC(log10_2), getAIC(log11_2), getAIC(log12_2))
+colnames(tab2) <- c("AIC", "AICc", "BIC")
+rownames(tab2) <- c("SARIMA(2,0,1)(2,0,0)","SARIMA(1,0,1)(1,0,0)","SARIMA(2,0,1)(1,0,0)","SARIMA(1,0,2)(1,0,0)",
+                   "SARIMA(2,0,2)(1,0,0)","SARIMA(1,0,1)(1,0,1)","SARIMA(2,0,1)(1,0,1)","SARIMA(1,0,2)(1,0,1)",
+                   "SARIMA(2,0,2)(1,0,1)","SARIMA(1,0,1)(2,0,1)","SARIMA(1,0,2)(2,0,1)","SARIMA(2,0,2)(2,0,1)")
+```
+
+```{r}
+tab2 %>% kableExtra::kbl() %>%
+  kable_material(c("striped", "hover"))
+```
+
+```{r}
+log1_2
+```
+
+$$Y_t = (\phi_1+\phi_2)Y_{t-1} + \phi_1\phi_2Y_{t-2} + (\Phi_1+\Phi_2)Y_{t-12} + (\phi_1+\phi_2)(\Phi_1+\Phi_2)Y_{t-13} + \phi_1\phi_2(\Phi_1+\Phi_2)Y_{t-14} + \Phi_1\Phi_2Y_{t-24} + \Phi_1\Phi_2(\phi_1+\phi_2)Y_{t-25} + \Phi_1\Phi_2\phi_1\phi_2Y_{t-26}+ \varepsilon_t +  \theta_1\varepsilon_{t-1}$$
+$$Y_t = 0.96Y_{t-1} -1.273Y_{t-2} -0.009Y_{t-12} -0.009Y_{t-13} + 0.012Y_{t-14} -0.01Y_{t-24} -0.01Y_{t-25} +  0.013Y_{t-26}+ \varepsilon_t -0.7\varepsilon_{t-1}$$
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "44"}
+checkresiduals(log1_2)
+Box.test(residuals(log1_2), lag=4, type="Ljung-Box", fitdf=1)
+tsdiag(log1_2, gof.lag = 15, omit.initial=F)
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "45"}
+residualslog2 <- residuals(log1_2)
+fittedlog2 <- logD0TS2 - residualslog2
+ts.plot(train_1956) + points(exp(fittedlog2), type = "l", col = 2, lty = 2)
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "46"}
+forecastlog2 <- forecast(log1_2, h=12)
+forecastlog2$lower <- exp(forecastlog2$lower)
+forecastlog2$upper <- exp(forecastlog2$upper)
+forecastlog2$mean <- exp(forecastlog2$mean)
+forecastlog2$x <- exp(forecastlog2$x)
+```
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "47"}
+drought.predict.test2 <- ts_reshape(val_1956)
+colnames(drought.predict.test2)[2] <- "Actual"
+
+forecast.full2 <- cbind(forecastlog2,drought.predict.test2[c("Actual")])
+forecast.full2
+
+acc2 <- accuracy(forecastlog2,val_1956)
+acc2
+
+autoplot(forecastlog2)
+
+autoplot(window(train_1956, start=c(1950,1))) + 
+  autolayer(forecastlog2, PI=TRUE, series="Forecast") +
+  autolayer(val_1956, series="True Drought Percentage", size=1) +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+  
+auto.arima(logD0TS2)
+```
+
+# Final Model Selection 
+
+## Old Data
+
+### Models Selected
+
+List Name of Forecast Selected by Your Process Here
+
+Holt Winters: D0.for.hw.old
+Cosine-Sine Model: d0_1.new
+SARIMA: forecastlog2
+
+### Model Comparison Table
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "48"}
+tab <- rbind(accuracy(D0.for.hw.old, val_1956)[2,2:3],
+             accuracy(d0_1.validation, val_1956)[2,2:3],
+             accuracy(forecastlog2, val_1956)[2,2:3])
+rownames(tab) <- c("Full Holt Winters", "Cosine-sine", "SARIMA")
+kable(tab)
+```
+
+### Visual Model Comparison
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "49"}
+autoplot(window(D0TS.train.old, start=c(1950,1))) + 
+  autolayer(D0.for.hw.old, PI=FALSE, series="Full Holt Winters") +
+  autolayer(d0_1.validation, PI=FALSE, series="Cosine-sine") +
+  autolayer(forecastlog2, PI=FALSE, series="SARIMA") +
+  autolayer(D0TS.test.old, series="Real Data") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+```
+
+### Selection
+
+From a combination of RMSE and MAE, we select the Full Holt Winters model for the overall period from 1895 to 1956.
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "50"}
+oldModel <- autoplot(window(D0TS.train.old, start=c(1950,1))) + 
+  autolayer(D0.for.hw.old, PI=TRUE, series="Full Holt Winters") +
+  autolayer(D0TS.test.old, series="Real Data") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought", title = "Old Model") +
+  theme_bw()
+```
+
+## New Data
+
+### Models Selected
+
+List Name of Model Selected by Your Process Here
+
+Holt Winters: D0.for.season.new
+Cosine-Sine Model: d0_2.new
+SARIMA: forecastlog
+
+### Model Comparison Table
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "51"}
+tab <- rbind(accuracy(D0.for.season.new, val_2022)[2,2:3],
+             accuracy(d0_2.validation2, val_2022)[2,2:3],
+             accuracy(forecastlog, val_2022)[2,2:3])
+rownames(tab) <- c("Holt Season", "Cosine-sine", "SARIMA")
+kable(tab)
+```
+
+### Visual Model Comparison
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "52"}
+autoplot(window(D0TS.train.new, start=c(2017,1))) + 
+  autolayer(D0.for.season.new, PI=FALSE, series="Seasonal Only Holt Winters") +
+  autolayer(d0_2.validation2, PI=FALSE, series="Cosine-sine") +
+  autolayer(forecastlog, PI=FALSE, series="SARIMA(2,0,1)(2,0,0)") +
+  autolayer(D0TS.test.new, series="Real Data") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought") +
+  theme_bw()
+```
+
+### Selection
+
+From a combination of RMSE and MAE, we select the SARIMA model for the overall period from 1956 to 2022.
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "53"}
+newModel <- autoplot(window(D0TS.train.new, start=c(2017,1))) + 
+  autolayer(forecastlog, PI=TRUE, series="SARIMA") +
+  autolayer(D0TS.test.new, series="Real Data") +
+  labs(x="Year", y="Percentage of Country Experiencing Drought", title = "New Model") +
+  theme_bw()
+```
+
+# Final Comparison
+
+## Old vs New Visual
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "54"}
+grid.arrange(oldModel, newModel, ncol = 2)
+```
+
+## Old vs New Mathematical
+
+```{r,cache = TRUE, warning = FALSE, message = FALSE, label = "55"}
+val.1956 <- ts_reshape(val_1956)[,-3]
+#val.1956[1:12,] <- c(1,2,3,107.6,107.5,113.2) 
+
+retail.full <- cbind(D0.for.hw.old, val.1956[c("1956")])
+colnames(retail.full)[6] <- "Actual"
+retail.full
+
+val.2022 <- ts_reshape(val_2022)[,-3]
+val.2022[13:15,] <- c(c(0,0),c(0,0),c(0,0)) #This is really dumb
+#val.1956[1:12,] <- c(1,2,3,107.6,107.5,113.2) 
+
+retail.full2 <- cbind(forecastlog, val.2022)
+colnames(retail.full2)[6] <- "Actual"
+head(retail.full2,12)
+```
